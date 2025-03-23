@@ -1,68 +1,67 @@
-from bs4 import BeautifulSoup
-import requests
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-import os
-from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+import pandas as pd
 
-load_dotenv()
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI")
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
 
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=CLIENT_ID,
-                                               client_secret=CLIENT_SECRET,
-                                               redirect_uri=REDIRECT_URI,
-                                               scope="playlist-modify-private"))
+chrome_options = webdriver.ChromeOptions()
+chrome_options.add_experimental_option('detach', True)
+driver = webdriver.Chrome(options=chrome_options)
+driver.get('https://www.nba.com/stats/players')
 
-user_id = sp.current_user()["id"]
-date = input("Which year do you want to travel to? Type the date in this format YYYY-MM-DD: ")
+driver.maximize_window()
 
-header = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0"}
-url = "https://www.billboard.com/charts/hot-100/" + date
-response = requests.get(url=url, headers=header)
+wait = WebDriverWait(driver, 10)
 
-soup = BeautifulSoup(response.text, 'html.parser')
+try:
+    decline = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#onetrust-reject-all-handler')))
+    decline.click()
+except:
+    pass
 
-song_titles = []
-original_artists = []
-titles = soup.select('ul > li > #title-of-a-story')
-artists = soup.select('ul > li > .c-label.a-no-trucate')
+time.sleep(1)
+all_players_stats = wait.until(EC.element_to_be_clickable((By.LINK_TEXT, 'See All Player Stats')))
+all_players_stats.click()
 
-for title, artist in zip(titles, artists):
-    song_titles.append(title.getText().strip())
-    original_artists.append(artist.getText().strip())
+per_game = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="__next"]/div[2]/div[2]/div[3]/section[1]/div/div/div[3]/label/div/select/option[2]')))
+per_game.click()
 
-print(f"Collected {len(song_titles)} songs and artists.")
+body = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.Crom_body__UYOcU tr')))
 
-year = date.split('-')[0]
-song_uris = []
-
-for title, artist in zip(song_titles, original_artists):
-    track_uri = None
-
-    query = f"track:{title}"
-    result = sp.search(q=query, type='track', limit=50)
-
-    for item in result['tracks']['items']:
-        spotify_title = item['name'].lower()
-        spotify_artists = [a['name'].lower() for a in item['artists']]
-
-
-        if (title.lower() in spotify_title or spotify_title in title.lower()) and any(artist.lower() in spotify_artist or spotify_artist in artist.lower() for spotify_artist in spotify_artists):
-            track_uri = item['uri']
+class_to_remove = 'Crom_stickySecondColumn__29Dwf'
+player_names = []
+for row in body:
+    tds = row.find_elements(By.TAG_NAME, 'td')
+    for td in tds:
+        if class_to_remove in td.get_attribute('class').split():
+            player_names.append(td.text)
+            driver.execute_script("""
+                var td = arguments[0];
+                td.parentNode.removeChild(td);
+            """, td)
             break
 
-    if track_uri:
-        song_uris.append(track_uri)
-    else:
-        print(f"Could not find an exact match for '{title}' by '{artist}' on Spotify.")
+head = driver.find_elements(By.CSS_SELECTOR, '.Crom_headers__mzI_m th')
+visible_head = [th for th in head if th.is_displayed()]
 
-playlist_name = f"Billboard Top 100 - {date}"
-playlist = sp.user_playlist_create(user=user_id, name=playlist_name, public=False)
+list_of_lists_body = []
+for row in body:
+    listt = row.text.split(' ')[1:]
+    list_of_lists_body.append(listt)
 
-if song_uris:
-    sp.playlist_add_items(playlist_id=playlist['id'], items=song_uris)
-    print(f"Playlist '{playlist_name}' created successfully with {len(song_uris)} songs.")
-else:
-    print("No songs were added to the playlist.")
+list_head = [th.text for th in visible_head][1:]
+
+for i in range(len(list_of_lists_body)):
+    list_of_lists_body[i].insert(0, player_names[i])
+
+df = pd.DataFrame(list_of_lists_body, columns=list_head)
+
+df.to_csv("top_50_nba_players_stats.csv", index=False)
+print(df)
+
+driver.quit()
